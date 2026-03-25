@@ -275,7 +275,7 @@ function closeRemoveModal() {
     if (removeModal) removeModal.classList.add("hidden")
 }
 
-async function confirmRemove(infoHash) {
+function confirmRemove(infoHash) {
     openRemoveModal(infoHash)
 }
 

@@ -80,10 +80,11 @@ const httpsAgent = new https.Agent({
   maxSockets: 4
 })
 
-const downloadFolder = "./downloads"
-const torrentFolder = "./torrents"
-const saveFile = "./saved-torrents.json"
-const settingsFile = "./settings.json"
+let downloadFolder = null
+let torrentFolder = null
+let saveFile = null
+let settingsFile = null
+let storageReady = false
 
 const defaultSettings = {
   torrentPort: 0,
@@ -101,13 +102,81 @@ const defaultSettings = {
   }
 }
 
-let settings = loadSettings()
+let settings = null
 
-if (!fs.existsSync(downloadFolder)) fs.mkdirSync(downloadFolder)
-if (!fs.existsSync(torrentFolder)) fs.mkdirSync(torrentFolder)
-if (!fs.existsSync(saveFile)) fs.writeFileSync(saveFile, "[]")
+function ensureDir(dirPath) {
+  if (!dirPath) return
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true })
+  }
+}
+
+function moveLegacyPath(src, dest) {
+  if (!src || !dest) return
+  if (!fs.existsSync(src)) return
+  if (fs.existsSync(dest)) return
+  try {
+    fs.renameSync(src, dest)
+  } catch {
+    try {
+      const stat = fs.statSync(src)
+      if (stat.isDirectory()) {
+        fs.cpSync(src, dest, { recursive: true, force: true })
+        fs.rmSync(src, { recursive: true, force: true })
+      } else {
+        fs.copyFileSync(src, dest)
+        fs.rmSync(src, { force: true })
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function migrateLegacyStorage(dataRoot) {
+  const roots = [
+    process.cwd(),
+    path.dirname(process.execPath || "")
+  ]
+
+  const seen = new Set()
+
+  roots.forEach(root => {
+    if (!root) return
+    if (seen.has(root)) return
+    seen.add(root)
+    if (dataRoot && path.resolve(root) === path.resolve(dataRoot)) return
+
+    moveLegacyPath(path.join(root, "downloads"), downloadFolder)
+    moveLegacyPath(path.join(root, "torrents"), torrentFolder)
+    moveLegacyPath(path.join(root, "saved-torrents.json"), saveFile)
+    moveLegacyPath(path.join(root, "settings.json"), settingsFile)
+  })
+}
+
+function initStoragePaths() {
+  if (storageReady) return
+  const dataRoot = app.getPath("userData")
+
+  downloadFolder = path.join(dataRoot, "downloads")
+  torrentFolder = path.join(dataRoot, "torrents")
+  saveFile = path.join(dataRoot, "saved-torrents.json")
+  settingsFile = path.join(dataRoot, "settings.json")
+
+  ensureDir(dataRoot)
+  migrateLegacyStorage(dataRoot)
+
+  ensureDir(downloadFolder)
+  ensureDir(torrentFolder)
+  if (!fs.existsSync(saveFile)) fs.writeFileSync(saveFile, "[]")
+
+  storageReady = true
+}
 
 function createWindow() {
+
+  initStoragePaths()
+  if (!settings) settings = loadSettings()
 
   win = new BrowserWindow({
     width: 1200,
@@ -286,13 +355,39 @@ function normalizeEntry(entry) {
     const type = entry.type === "magnet" ? "magnet" : "file"
     const value = typeof entry.value === "string" ? entry.value.trim() : ""
     if (!value) return null
-    return { type, value }
+    const infoHash = typeof entry.infoHash === "string" ? entry.infoHash.trim() : ""
+    return infoHash ? { type, value, infoHash } : { type, value }
   }
   return null
 }
 
 function entryKey(entry) {
   return `${entry.type}:${entry.value}`
+}
+
+function infoHashFromMagnet(magnet) {
+  if (typeof magnet !== "string") return null
+  const match = magnet.match(/xt=urn:btih:([a-zA-Z0-9]+)/)
+  if (!match) return null
+  const hash = match[1]
+  if (hash.length === 40) return hash.toLowerCase()
+  if (hash.length === 32) {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    let bits = ""
+    const upper = hash.toUpperCase()
+    for (const char of upper) {
+      const val = alphabet.indexOf(char)
+      if (val === -1) return null
+      bits += val.toString(2).padStart(5, "0")
+    }
+    let hex = ""
+    for (let i = 0; i + 4 <= bits.length; i += 4) {
+      const chunk = bits.slice(i, i + 4)
+      hex += parseInt(chunk, 2).toString(16)
+    }
+    return hex.toLowerCase()
+  }
+  return null
 }
 
 function readSavedEntries() {
@@ -334,6 +429,23 @@ function addSavedEntry(entry) {
   return true
 }
 
+function updateSavedEntryInfoHash(entry, infoHash) {
+  const normalized = normalizeEntry(entry)
+  if (!normalized || !infoHash) return
+  const hash = String(infoHash).toLowerCase()
+  const entries = readSavedEntries()
+  let changed = false
+
+  const updated = entries.map(item => {
+    if (entryKey(item) !== entryKey(normalized)) return item
+    if (item.infoHash && item.infoHash.toLowerCase() === hash) return item
+    changed = true
+    return { ...item, infoHash: hash }
+  })
+
+  if (changed) saveSavedEntries(updated)
+}
+
 function removeSavedEntry(entry) {
   const normalized = normalizeEntry(entry)
   if (!normalized) return false
@@ -342,6 +454,30 @@ function removeSavedEntry(entry) {
   const entries = readSavedEntries().filter(item => entryKey(item) !== key)
   saveSavedEntries(entries)
   return true
+}
+
+function removeSavedEntriesByInfoHash(infoHash) {
+  if (!infoHash) return []
+  const target = String(infoHash).toLowerCase()
+  const entries = readSavedEntries()
+  const removed = []
+
+  const filtered = entries.filter(item => {
+    const entryHash = item.infoHash
+      ? String(item.infoHash).toLowerCase()
+      : (item.type === "magnet" ? infoHashFromMagnet(item.value) : null)
+    if (entryHash && entryHash === target) {
+      removed.push(item)
+      return false
+    }
+    return true
+  })
+
+  if (removed.length > 0) {
+    saveSavedEntries(filtered)
+  }
+
+  return removed
 }
 
 function createClient() {
@@ -834,7 +970,13 @@ function attachTorrentHandlers(torrent, entry) {
 
   torrent._zaynPaused = false
   torrent._zaynWires = new Set()
-  if (entry) torrent._zaynEntry = entry
+  if (entry) {
+    torrent._zaynEntry = entry
+    if (torrent.infoHash) {
+      entry.infoHash = torrent.infoHash
+      updateSavedEntryInfoHash(entry, torrent.infoHash)
+    }
+  }
 
   torrent.on("done", () => {
     if (!settings?.behavior?.autoSeed) {
@@ -1299,11 +1441,12 @@ ipcMain.handle("remove-torrent", async (event, payload) => {
   }
 
   const infoHash = payload?.infoHash || payload?.name
-  if (!infoHash) {
+  if (typeof infoHash !== "string" || infoHash.trim().length === 0) {
     return { ok: false, message: "Missing torrent id." }
   }
 
-  const torrent = findTorrentById(infoHash)
+  const torrentId = infoHash.trim()
+  const torrent = findTorrentById(torrentId)
   if (!torrent) {
     return { ok: false, message: "Torrent not found." }
   }
@@ -1311,20 +1454,33 @@ ipcMain.handle("remove-torrent", async (event, payload) => {
   const removeContent = !!payload?.removeContent
 
   const entry = torrent._zaynEntry
+  const removedEntries = removeSavedEntriesByInfoHash(torrent.infoHash || torrentId)
+
   if (entry) {
     removeSavedEntry(entry)
-    if (entry.type === "file") {
-      const filePath = path.join(torrentFolder, entry.value)
-      try {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-      } catch {
-        // ignore
-      }
+  }
+
+  const deleteEntryFile = (item) => {
+    if (item?.type !== "file") return
+    const filePath = path.join(torrentFolder, item.value)
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    } catch {
+      // ignore
     }
   }
 
+  if (entry) deleteEntryFile(entry)
+  removedEntries.forEach(deleteEntryFile)
+
   try {
-    await client.remove(torrent, { destroyStore: removeContent })
+    const id = torrent.infoHash || torrentId
+    await new Promise((resolve, reject) => {
+      client.remove(id, { destroyStore: removeContent }, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
   } catch (err) {
     return { ok: false, message: err?.message || "Failed to remove torrent." }
   }

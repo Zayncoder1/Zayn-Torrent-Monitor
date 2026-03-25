@@ -1,6 +1,6 @@
 {
   "name": "zayntorrent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Torrent monitor built with Electron and WebTorrent.",
   "author": "Zayn (Solo)",
   "main": "main.js",
