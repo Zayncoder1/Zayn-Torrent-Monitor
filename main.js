@@ -5,6 +5,8 @@ import path from "path"
 import https from "https"
 import dns from "dns"
 import http from "http"
+import net from "net"
+import os from "os"
 import NatAPI from "@silentbot1/nat-api"
 
 let client = null
@@ -66,6 +68,11 @@ const PROBE_URLS = [
   "https://clients3.google.com/generate_204",
   "https://www.cloudflare.com/cdn-cgi/trace",
   "https://www.msftconnecttest.com/connecttest.txt"
+]
+
+const TCP_PROBES = [
+  { host: "1.1.1.1", port: 443 },
+  { host: "1.0.0.1", port: 443 }
 ]
 
 const httpsAgent = new https.Agent({
@@ -918,7 +925,12 @@ function probeHttp(url) {
 
   return new Promise(resolve => {
 
-    const req = https.get(url, { agent: httpsAgent }, (res) => {
+    const target = new URL(url)
+    const isHttps = target.protocol === "https:"
+    const requestFn = isHttps ? https.get : http.get
+    const options = isHttps ? { agent: httpsAgent } : {}
+
+    const req = requestFn(url, options, (res) => {
 
       res.resume()
 
@@ -936,6 +948,56 @@ function probeHttp(url) {
 
   })
 
+}
+
+function probeTcp(host, port) {
+  return new Promise(resolve => {
+    const socket = net.connect({ host, port })
+
+    const finish = (result) => {
+      try {
+        socket.destroy()
+      } catch {
+        // ignore
+      }
+      resolve(result)
+    }
+
+    socket.setTimeout(CHECK_TIMEOUT_MS)
+
+    socket.on("connect", () => finish(true))
+    socket.on("error", () => finish(false))
+    socket.on("timeout", () => finish(false))
+  })
+}
+
+async function probeTcpAny() {
+  const results = await Promise.all(
+    TCP_PROBES.map(target => probeTcp(target.host, target.port))
+  )
+  return results.some(Boolean)
+}
+
+function hasExternalInterface() {
+  const nets = os.networkInterfaces()
+  const entries = Object.values(nets).flat().filter(Boolean)
+  return entries.some(info => {
+    if (info.internal) return false
+    const addr = info.address || ""
+    if (!addr) return false
+    if (info.family === "IPv4") {
+      if (addr === "0.0.0.0") return false
+      if (addr.startsWith("169.254.")) return false
+      return true
+    }
+    if (info.family === "IPv6") {
+      const lower = addr.toLowerCase()
+      if (lower === "::1") return false
+      if (lower.startsWith("fe80:")) return false
+      return true
+    }
+    return false
+  })
 }
 
 async function probeDnsAny() {
@@ -965,12 +1027,14 @@ async function checkInternet() {
 
   try {
 
-    const [dnsOk, httpOk] = await Promise.all([
-      probeDnsAny(),
-      probeHttpAny()
+    if (!hasExternalInterface()) return false
+
+    const [httpOk, tcpOk] = await Promise.all([
+      probeHttpAny(),
+      probeTcpAny()
     ])
 
-    return dnsOk || httpOk
+    return httpOk || tcpOk
 
   } finally {
 
