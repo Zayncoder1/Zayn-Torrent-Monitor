@@ -289,6 +289,7 @@ font-weight:bold;
             <div class="tabs">
                 <button class="tab-button active" data-tab="torrent">Torrent</button>
                 <button class="tab-button" data-tab="webui">Web UI</button>
+                <button class="tab-button" data-tab="behavior">Behavior</button>
             </div>
 
             <div class="tab-panel active" id="tab-torrent">
@@ -330,6 +331,15 @@ font-weight:bold;
                     <input id="settingWebUiPort" type="number" min="0" max="65535" />
                     <div class="hint">Port 80 can require admin rights.</div>
                     <div id="webUiStatus" class="hint"></div>
+                </div>
+            </div>
+
+            <div class="tab-panel" id="tab-behavior">
+                <div class="field">
+                    <label>
+                        <input id="settingAutoSeed" type="checkbox" />
+                        Seed automatically when download is finished
+                    </label>
                 </div>
             </div>
 

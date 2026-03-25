@@ -27,6 +27,7 @@ const settingPortForwardingWebUi = document.getElementById("settingPortForwardin
 const settingWebUiEnabled = document.getElementById("settingWebUiEnabled")
 const settingWebUiHost = document.getElementById("settingWebUiHost")
 const settingWebUiPort = document.getElementById("settingWebUiPort")
+const settingAutoSeed = document.getElementById("settingAutoSeed")
 
 const removeModal = document.getElementById("removeModal")
 const removeClose = document.getElementById("removeClose")
@@ -38,7 +39,8 @@ const removeContentCheckbox = document.getElementById("removeContentCheckbox")
 const tabButtons = Array.from(document.querySelectorAll(".tab-button"))
 const tabPanels = {
     torrent: document.getElementById("tab-torrent"),
-    webui: document.getElementById("tab-webui")
+    webui: document.getElementById("tab-webui"),
+    behavior: document.getElementById("tab-behavior")
 }
 
 const canvas = document.getElementById("speedGraph")
@@ -166,6 +168,7 @@ ipcRenderer.on("stats", (event, data) => {
 <div id="stats-${id}"></div>
 
 <button id="toggle-${id}" onclick="toggleTorrent('${id}')">Pause</button>
+<button id="open-${id}" onclick="openTorrent('${id}')">Go to file</button>
 <button class="danger" onclick="confirmRemove('${id}')">Remove</button>
 
 `
@@ -190,10 +193,11 @@ ipcRenderer.on("stats", (event, data) => {
 
         if (t.status === "Error") status.style.color = "red"
         else if (t.status === "Paused") status.style.color = "orange"
+        else if (t.status === "Completed") status.style.color = "#38bdf8"
         else if (t.status === "Seeding") status.style.color = "lime"
         else status.style.color = "white"
 
-        torrentPaused[id] = t.status === "Paused"
+        torrentPaused[id] = t.status === "Paused" || t.status === "Completed"
 
         const toggle = document.getElementById("toggle-" + id)
         if (toggle) toggle.textContent = torrentPaused[id] ? "Resume" : "Pause"
@@ -233,6 +237,13 @@ function toggleTorrent(name) {
         ipcRenderer.send("resume-torrent", name)
     } else {
         ipcRenderer.send("pause-torrent", name)
+    }
+}
+
+async function openTorrent(infoHash) {
+    const result = await ipcRenderer.invoke("show-in-folder", infoHash)
+    if (!result?.ok) {
+        setAddStatus(result?.message || "Failed to open download folder.", true)
     }
 }
 
@@ -391,6 +402,9 @@ function fillSettingsForm(settings, status) {
     settingWebUiEnabled.checked = settings.webUi?.enabled ?? false
     settingWebUiHost.value = settings.webUi?.host ?? "0.0.0.0"
     settingWebUiPort.value = settings.webUi?.port ?? 80
+    if (settingAutoSeed) {
+        settingAutoSeed.checked = settings.behavior?.autoSeed ?? false
+    }
 
     updateSettingsStatus(status)
 }
@@ -418,6 +432,9 @@ async function saveSettings() {
             enabled: settingWebUiEnabled.checked,
             host: settingWebUiHost.value.trim() || "0.0.0.0",
             port: Number(settingWebUiPort.value)
+        },
+        behavior: {
+            autoSeed: settingAutoSeed?.checked ?? false
         }
     }
 

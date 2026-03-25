@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron"
+import { app, BrowserWindow, ipcMain, shell } from "electron"
 import WebTorrent from "webtorrent"
 import fs from "fs"
 import path from "path"
@@ -83,6 +83,9 @@ const defaultSettings = {
   portForwarding: {
     torrent: true,
     webUi: false
+  },
+  behavior: {
+    autoSeed: false
   },
   webUi: {
     enabled: false,
@@ -216,12 +219,18 @@ function normalizeSettings(raw) {
   const webUiForwarding = pfRaw.webUi !== undefined
     ? Boolean(pfRaw.webUi)
     : defaultSettings.portForwarding.webUi
+  const autoSeed = raw?.behavior?.autoSeed === undefined
+    ? defaultSettings.behavior.autoSeed
+    : Boolean(raw.behavior.autoSeed)
 
   return {
     torrentPort: normalizePort(raw?.torrentPort, defaultSettings.torrentPort),
     portForwarding: {
       torrent: torrentForwarding,
       webUi: webUiForwarding
+    },
+    behavior: {
+      autoSeed
     },
     webUi: {
       enabled: raw?.webUi?.enabled === undefined
@@ -820,6 +829,12 @@ function attachTorrentHandlers(torrent, entry) {
   torrent._zaynWires = new Set()
   if (entry) torrent._zaynEntry = entry
 
+  torrent.on("done", () => {
+    if (!settings?.behavior?.autoSeed) {
+      autoStopSeeding(torrent)
+    }
+  })
+
   torrent.on("wire", (wire) => {
 
     torrent._zaynWires.add(wire)
@@ -857,6 +872,10 @@ function attachTorrentHandlers(torrent, entry) {
     }
 
   })
+
+  if (!settings?.behavior?.autoSeed && (torrent.progress === 1 || torrent.done)) {
+    autoStopSeeding(torrent)
+  }
 }
 
 function loadTorrentFile(file, entry) {
@@ -976,6 +995,7 @@ function sendStats() {
     let status = "Downloading"
 
     if (!internetState) status = "Error"
+    else if (t.progress === 1 && !settings?.behavior?.autoSeed) status = "Completed"
     else if (t.paused) status = "Paused"
     else if (t.progress === 1) status = "Seeding"
 
@@ -1006,6 +1026,36 @@ function sendToRenderer(channel, payload) {
   if (!win || win.isDestroyed()) return
   if (!win.webContents || win.webContents.isDestroyed()) return
   win.webContents.send(channel, payload)
+}
+
+function autoStopSeeding(torrent) {
+  if (!torrent || torrent._zaynAutoStopped) return
+  torrent._zaynAutoStopped = true
+  torrent._zaynPaused = true
+  try {
+    torrent.pause()
+  } catch {
+    // ignore
+  }
+  if (torrent._zaynWires && torrent._zaynWires.size > 0) {
+    Array.from(torrent._zaynWires).forEach(wire => {
+      try {
+        wire.destroy()
+      } catch {
+        // ignore
+      }
+    })
+  }
+}
+
+function getTorrentOpenTarget(torrent) {
+  if (!torrent) return null
+  const basePath = path.resolve(torrent.path || downloadFolder)
+  if (Array.isArray(torrent.files) && torrent.files.length > 0) {
+    const filePath = path.resolve(basePath, torrent.files[0].path)
+    return { type: "file", path: filePath }
+  }
+  return { type: "folder", path: basePath }
 }
 
 function findTorrentById(id) {
@@ -1048,6 +1098,7 @@ ipcMain.on("resume-torrent", (event, name) => {
 
   if (!torrent) return
 
+  torrent._zaynAutoStopped = false
   torrent._zaynPaused = false
   torrent.resume()
 
@@ -1076,6 +1127,33 @@ ipcMain.handle("save-settings", async (event, incoming) => {
 
   sendSettingsStatus()
   return payload
+})
+
+ipcMain.handle("show-in-folder", (event, infoHash) => {
+  if (!client || client.destroyed) {
+    return { ok: false, message: "Client not ready yet." }
+  }
+
+  const torrent = findTorrentById(infoHash)
+  if (!torrent) {
+    return { ok: false, message: "Torrent not found." }
+  }
+
+  const target = getTorrentOpenTarget(torrent)
+  if (!target) {
+    return { ok: false, message: "Download path not available." }
+  }
+
+  try {
+    if (target.type === "file") {
+      shell.showItemInFolder(target.path)
+    } else {
+      shell.openPath(target.path)
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, message: err?.message || "Failed to open download folder." }
+  }
 })
 
 ipcMain.handle("add-magnet", (event, magnet) => {
