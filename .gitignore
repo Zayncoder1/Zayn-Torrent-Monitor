@@ -1,0 +1,26 @@
+# Node / npm
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Electron build output
+/dist/
+/out/
+/release/
+
+# App data / user state
+/downloads/
+/torrents/
+saved-torrents.json
+settings.json
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+
+# Codex local
+.codex/

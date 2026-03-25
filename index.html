@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <title>Zayn Torrent Monitor</title>
+
+    <style>
+        body {
+            font-family: Arial;
+            background: #0f172a;
+            color: white;
+            padding: 20px;
+        }
+
+        .panel {
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .progress {
+            height: 20px;
+            background: #334155;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+
+        .bar {
+            height: 100%;
+            background: #22c55e;
+            width: 0%;
+        }
+
+        .connection {
+            font-size: 13px;
+            margin: 3px 0;
+        }
+
+        canvas {
+            background: #0b1220;
+            border-radius: 10px;
+        }
+
+        button {
+            margin-top: 5px;
+            margin-right: 5px;
+            padding: 6px 12px;
+        }
+
+        .settings-button {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+            user-select: none;
+        }
+
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .modal.hidden {
+            display: none;
+        }
+
+        .modal-content {
+            width: 620px;
+            max-width: 90vw;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .tab-button {
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: white;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .tab-button.active {
+            background: #22c55e;
+            color: #0b1220;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 10px;
+        }
+
+        .field label {
+            font-size: 13px;
+            margin-bottom: 4px;
+            color: #cbd5f5;
+        }
+
+        .field input[type="text"],
+        .field input[type="number"] {
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #0b1220;
+            color: white;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+        }
+
+        .status-line {
+            font-size: 12px;
+            color: #cbd5f5;
+        }
+
+        .todo {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .danger {
+            background: #dc2626;
+            border: 1px solid #b91c1c;
+            color: white;
+        }
+
+        .system-status {
+            background: #7f1d1d;
+            border: 1px solid #ef4444;
+            color: #fee2e2;
+            padding: 8px 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            display: none;
+        }
+
+        .add-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .add-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .add-row input[type="text"] {
+            flex: 1;
+            min-width: 220px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #0b1220;
+            color: white;
+        }
+
+        .add-status {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+    </style>
+
+</head>
+
+<body>
+
+    <h1>Zayn Torrent Monitor</h1>
+
+    <div id="settingsButton" class="settings-button" title="Settings">
+        &#9881;
+    </div>
+
+    <div id="internetStatus" style="
+background:#64748b;
+padding:10px;
+border-radius:8px;
+margin-bottom:15px;
+font-weight:bold;
+">
+        Checking connection...
+    </div>
+
+    <div id="systemStatus" class="system-status"></div>
+
+    <div class="panel">
+
+        <h2>Bandwidth Graph</h2>
+
+        <canvas id="speedGraph" width="1000" height="200"></canvas>
+
+    </div>
+
+    <div class="panel">
+
+        <h2>Live Connections</h2>
+
+        <div id="connections"></div>
+
+    </div>
+
+    <div class="panel">
+
+        <h2>Torrents</h2>
+
+        <div class="add-controls">
+            <div class="add-row">
+                <input id="magnetInput" type="text" placeholder="Paste magnet link..." />
+                <button id="addMagnetBtn">Add Magnet</button>
+            </div>
+            <div class="add-row">
+                <input id="torrentFileInput" type="file" accept=".torrent" multiple style="display:none" />
+                <button id="addTorrentFileBtn">Add Torrent File</button>
+            </div>
+            <div id="addStatus" class="add-status"></div>
+        </div>
+
+        <div id="torrents"></div>
+
+    </div>
+
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button id="settingsClose">Close</button>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-button active" data-tab="torrent">Torrent</button>
+                <button class="tab-button" data-tab="webui">Web UI</button>
+            </div>
+
+            <div class="tab-panel active" id="tab-torrent">
+                <div class="field">
+                    <label for="settingTorrentPort">Torrent Port</label>
+                    <input id="settingTorrentPort" type="number" min="0" max="65535" />
+                    <div class="hint">Use 0 to pick an unused port.</div>
+                    <div id="torrentPortActual" class="hint"></div>
+                </div>
+                <div class="field">
+                    <label>
+                        <input id="settingPortForwardingTorrent" type="checkbox" />
+                        Enable UPnP / NAT-PMP For Torrent Port
+                    </label>
+                    <div id="portForwardingStatusTorrent" class="hint"></div>
+                </div>
+            </div>
+
+            <div class="tab-panel" id="tab-webui">
+                <div class="field">
+                    <label>
+                        <input id="settingWebUiEnabled" type="checkbox" />
+                        Enable Web UI
+                    </label>
+                </div>
+                <div class="field">
+                    <label>
+                        <input id="settingPortForwardingWebUi" type="checkbox" />
+                        Forward Web UI Port (UPnP / NAT-PMP)
+                    </label>
+                    <div id="portForwardingStatusWebUi" class="hint"></div>
+                </div>
+                <div class="field">
+                    <label for="settingWebUiHost">Bind IP</label>
+                    <input id="settingWebUiHost" type="text" placeholder="0.0.0.0" />
+                </div>
+                <div class="field">
+                    <label for="settingWebUiPort">Port</label>
+                    <input id="settingWebUiPort" type="number" min="0" max="65535" />
+                    <div class="hint">Port 80 can require admin rights.</div>
+                    <div id="webUiStatus" class="hint"></div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <div id="settingsStatus" class="status-line"></div>
+                <button id="settingsSave">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="removeModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Remove Torrent</h2>
+                <button id="removeClose">Close</button>
+            </div>
+            <div id="removeText" style="margin-bottom:10px;"></div>
+            <div class="field">
+                <label>
+                    <input id="removeContentCheckbox" type="checkbox" />
+                    Remove Content (delete downloaded files)
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button id="removeCancel">No</button>
+                <button id="removeConfirm" class="danger">Yes, Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+
+</body>
+
+</html>

@@ -1,0 +1,46 @@
+{
+  "name": "zayntorrent",
+  "version": "1.0.0",
+  "description": "Torrent monitor built with Electron and WebTorrent.",
+  "author": "Zayn (Solo)",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.zayn.torrentmonitor",
+    "productName": "Zayn Torrent Monitor",
+    "directories": {
+      "output": "dist"
+    },
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "files": [
+      "**/*",
+      "!downloads/**",
+      "!torrents/**",
+      "!saved-torrents.json",
+      "!settings.json",
+      "!dist/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "copyright": "Copyright ?? 2026 Zayn",
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "webtorrent": "^2.5.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^26.8.1"
+  }
+}
