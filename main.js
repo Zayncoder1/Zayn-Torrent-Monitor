@@ -24,6 +24,7 @@ let lastStats = {
 }
 let clientError = null
 let exitRequested = false
+let portFallbackActive = false
 
 let webServer = null
 let webServerState = {
@@ -329,15 +330,35 @@ function removeSavedEntry(entry) {
 
 function createClient() {
   clientError = null
+  const portToUse = portFallbackActive && settings.torrentPort !== 0
+    ? 0
+    : settings.torrentPort
   client = new WebTorrent({
-    torrentPort: settings.torrentPort,
-    dhtPort: settings.torrentPort,
+    torrentPort: portToUse,
+    dhtPort: portToUse,
     natUpnp: false,
     natPmp: false
   })
 
   client.on("error", (err) => {
-    clientError = err?.message || "Unknown error"
+    const code = err?.code || (typeof err?.message === "string" && err.message.includes("EADDRINUSE")
+      ? "EADDRINUSE"
+      : null)
+
+    if (!portFallbackActive && settings.torrentPort !== 0 && code === "EADDRINUSE") {
+      portFallbackActive = true
+      rebuildClient()
+      return
+    }
+
+    if (settings.torrentPort !== 0 && code === "EACCES") {
+      clientError = `Permission denied for port ${settings.torrentPort}. Try a higher port.`
+    } else if (settings.torrentPort !== 0 && code === "EADDRINUSE") {
+      clientError = `Port ${settings.torrentPort} is already in use.`
+    } else {
+      clientError = err?.message || "Unknown error"
+    }
+
     console.error("WebTorrent error:", err)
     sendSettingsStatus()
   })
@@ -1043,6 +1064,7 @@ ipcMain.handle("save-settings", async (event, incoming) => {
   settings = normalizeSettings(incoming)
   saveSettings(settings)
 
+  portFallbackActive = false
   await rebuildClient()
   await restartWebUi()
   await applyPortForwarding()
