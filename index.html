@@ -191,6 +191,23 @@
             display: none;
         }
 
+        .update-bar {
+            background: #facc15;
+            border: 1px solid #eab308;
+            color: #1f2937;
+            padding: 8px 10px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            display: none;
+        }
+
+        .update-bar a {
+            color: #1f2937;
+            text-decoration: underline;
+        }
+
         .add-controls {
             display: flex;
             flex-direction: column;
@@ -229,6 +246,12 @@
 
     <div id="settingsButton" class="settings-button" title="Settings">
         &#9881;
+    </div>
+
+    <div id="updateBar" class="update-bar">
+        Update Available. Go to
+        <a id="updateLink" href="https://github.com/Zayncoder1/Zayn-Torrent-Monitor/releases">https://github.com/Zayncoder1/Zayn-Torrent-Monitor/releases</a>
+        to update.
     </div>
 
     <div id="internetStatus" style="
@@ -339,6 +362,12 @@ font-weight:bold;
                     <label>
                         <input id="settingAutoSeed" type="checkbox" />
                         Seed automatically when download is finished
+                    </label>
+                </div>
+                <div class="field">
+                    <label>
+                        <input id="settingBackgroundOnClose" type="checkbox" />
+                        Download/Seed Torrents While Closed
                     </label>
                 </div>
             </div>

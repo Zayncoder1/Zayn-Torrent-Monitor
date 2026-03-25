@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron"
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } from "electron"
 import WebTorrent from "webtorrent"
 import fs from "fs"
 import path from "path"
@@ -8,6 +8,7 @@ import http from "http"
 import net from "net"
 import os from "os"
 import NatAPI from "@silentbot1/nat-api"
+import crypto from "crypto"
 
 let client = null
 
@@ -35,6 +36,7 @@ let webServerState = {
   port: null,
   error: null
 }
+let tray = null
 let natClient = null
 let portForwardingInFlight = false
 let portForwardingState = {
@@ -57,6 +59,7 @@ let portForwardingState = {
 
 const FAIL_LIMIT = 5
 const CHECK_TIMEOUT_MS = 2500
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 const PROBE_DNS = [
   "cloudflare.com",
@@ -80,11 +83,47 @@ const httpsAgent = new https.Agent({
   maxSockets: 4
 })
 
+function randomId(length) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+  const bytes = crypto.randomBytes(length)
+  let out = ""
+  for (let i = 0; i < length; i++) {
+    out += alphabet[bytes[i] % alphabet.length]
+  }
+  return out
+}
+
+function getClientVersionToken() {
+  const version = app.getVersion ? app.getVersion() : "0.0.0"
+  const parts = String(version).split(".").map(part => parseInt(part, 10))
+  const major = Number.isFinite(parts[0]) ? parts[0] : 0
+  const minor = Number.isFinite(parts[1]) ? parts[1] : 0
+  const patch = Number.isFinite(parts[2]) ? parts[2] : 0
+  const patchToken = String(patch).padStart(2, "0").slice(-2)
+  return `${major % 10}${minor % 10}${patchToken}`
+}
+
+function buildPeerId() {
+  const versionToken = getClientVersionToken()
+  const prefix = `-ZT${versionToken}-`
+  const suffix = randomId(12)
+  const peerId = Buffer.from(prefix + suffix, "ascii")
+  if (peerId.length === 20) return peerId
+  const fallback = Buffer.from("-ZT0000-" + randomId(12), "ascii")
+  return fallback.slice(0, 20)
+}
+
 let downloadFolder = null
 let torrentFolder = null
 let saveFile = null
 let settingsFile = null
 let storageReady = false
+let updateCheckTimer = null
+let updateState = {
+  available: false,
+  latestVersion: null,
+  url: "https://github.com/Zayncoder1/Zayn-Torrent-Monitor/releases"
+}
 
 const defaultSettings = {
   torrentPort: 0,
@@ -93,7 +132,8 @@ const defaultSettings = {
     webUi: false
   },
   behavior: {
-    autoSeed: false
+    autoSeed: false,
+    backgroundOnClose: true
   },
   webUi: {
     enabled: false,
@@ -188,6 +228,9 @@ function createWindow() {
   })
 
   win.loadFile("index.html")
+  win.webContents.on("did-finish-load", () => {
+    sendUpdateStatus()
+  })
 
   if (!client) {
     createClient()
@@ -195,8 +238,19 @@ function createWindow() {
   }
 
   startWebUi()
+  updateTrayState()
+  startUpdateChecks()
 
   updateTimer = setInterval(updateLoop, 1000)
+
+  win.on("close", (event) => {
+    if (exitRequested) return
+    if (settings?.behavior?.backgroundOnClose) {
+      event.preventDefault()
+      win.hide()
+      updateTrayState()
+    }
+  })
 
   win.on("closed", () => {
     win = null
@@ -207,6 +261,7 @@ function createWindow() {
 app.whenReady().then(createWindow)
 
 app.on("window-all-closed", () => {
+  if (settings?.behavior?.backgroundOnClose) return
   shutdownAndExit(0)
 })
 
@@ -270,6 +325,11 @@ async function shutdownServices() {
   } catch {
     // ignore
   }
+
+  if (updateCheckTimer) {
+    clearInterval(updateCheckTimer)
+    updateCheckTimer = null
+  }
 }
 
 async function shutdownAndExit(code) {
@@ -298,6 +358,9 @@ function normalizeSettings(raw) {
   const autoSeed = raw?.behavior?.autoSeed === undefined
     ? defaultSettings.behavior.autoSeed
     : Boolean(raw.behavior.autoSeed)
+  const backgroundOnClose = raw?.behavior?.backgroundOnClose === undefined
+    ? defaultSettings.behavior.backgroundOnClose
+    : Boolean(raw.behavior.backgroundOnClose)
 
   return {
     torrentPort: normalizePort(raw?.torrentPort, defaultSettings.torrentPort),
@@ -306,7 +369,8 @@ function normalizeSettings(raw) {
       webUi: webUiForwarding
     },
     behavior: {
-      autoSeed
+      autoSeed,
+      backgroundOnClose
     },
     webUi: {
       enabled: raw?.webUi?.enabled === undefined
@@ -485,7 +549,10 @@ function createClient() {
   const portToUse = portFallbackActive && settings.torrentPort !== 0
     ? 0
     : settings.torrentPort
+  const peerId = buildPeerId()
   client = new WebTorrent({
+    peerId,
+    nodeId: crypto.randomBytes(20),
     torrentPort: portToUse,
     dhtPort: portToUse,
     natUpnp: false,
@@ -577,6 +644,96 @@ function buildSettingsStatus() {
 
 function sendSettingsStatus() {
   sendToRenderer("settings-status", buildSettingsStatus())
+}
+
+function sendUpdateStatus() {
+  sendToRenderer("update-status", updateState)
+}
+
+function parseVersion(value) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/^v/i, "")
+  const parts = cleaned.split(".").map(n => parseInt(n, 10)).filter(n => Number.isFinite(n))
+  return parts.length ? parts : [0]
+}
+
+function compareVersions(a, b) {
+  const max = Math.max(a.length, b.length)
+  for (let i = 0; i < max; i += 1) {
+    const left = a[i] || 0
+    const right = b[i] || 0
+    if (left > right) return 1
+    if (left < right) return -1
+  }
+  return 0
+}
+
+function fetchLatestRelease() {
+  return new Promise(resolve => {
+    const options = {
+      headers: {
+        "User-Agent": "ZaynTorrentMonitor",
+        "Accept": "application/vnd.github+json"
+      },
+      agent: httpsAgent
+    }
+
+    const req = https.get("https://api.github.com/repos/Zayncoder1/Zayn-Torrent-Monitor/releases/latest", options, (res) => {
+      let data = ""
+      res.on("data", chunk => { data += chunk })
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          resolve(null)
+          return
+        }
+        try {
+          const json = JSON.parse(data)
+          if (!json || json.draft || json.prerelease) {
+            resolve(null)
+            return
+          }
+          resolve(json)
+        } catch {
+          resolve(null)
+        }
+      })
+    })
+
+    req.on("error", () => resolve(null))
+    req.setTimeout(5000, () => {
+      req.destroy()
+      resolve(null)
+    })
+  })
+}
+
+async function checkForUpdates() {
+  if (shuttingDown) return
+  const latest = await fetchLatestRelease()
+  if (!latest || !latest.tag_name) {
+    updateState.available = false
+    sendUpdateStatus()
+    return
+  }
+
+  const currentVersion = parseVersion(app.getVersion())
+  const latestVersion = parseVersion(latest.tag_name)
+  const available = compareVersions(latestVersion, currentVersion) > 0
+
+  updateState = {
+    available,
+    latestVersion: latest.tag_name,
+    url: updateState.url
+  }
+
+  sendUpdateStatus()
+}
+
+function startUpdateChecks() {
+  if (updateCheckTimer) return
+  checkForUpdates()
+  updateCheckTimer = setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL_MS)
 }
 
 async function destroyPortForwarding() {
@@ -1234,6 +1391,65 @@ function sendToRenderer(channel, payload) {
   win.webContents.send(channel, payload)
 }
 
+function getTrayIcon() {
+  const dataUrl =
+    "data:image/png;base64," +
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAAi0lEQVR4AWP4" +
+    "z8DAwMDAmGdgYGBgkCkMDAwMDAwMZkB+gWJgYGBgWGFoQkYB4eHh4eHh/8Z" +
+    "wP///4YGDgYGJiYmJgYGBgYGDkA2QEMkNQ4mQkA0EoS4lGQkB2QkA0EoS4l" +
+    "GQkB2QkA0EoS4lGQkB2QkA0P8B2wEJ6pQeZ2oAAAAASUVORK5CYII="
+
+  const image = nativeImage.createFromDataURL(dataUrl)
+  return image.isEmpty() ? nativeImage.createEmpty() : image
+}
+
+function updateTrayState() {
+  try {
+    if (settings?.behavior?.backgroundOnClose) {
+      if (!tray) {
+        tray = new Tray(getTrayIcon())
+        const contextMenu = Menu.buildFromTemplate([
+          {
+            label: "Show",
+            click: () => {
+              if (win) {
+                win.show()
+                win.focus()
+              } else {
+                createWindow()
+              }
+            }
+          },
+          {
+            label: "Quit",
+            click: () => {
+              shutdownAndExit(0)
+            }
+          }
+        ])
+        tray.setToolTip("Zayn Torrent Monitor")
+        tray.setContextMenu(contextMenu)
+        tray.on("click", () => {
+          if (!win) {
+            createWindow()
+            return
+          }
+          if (win.isVisible()) win.hide()
+          else {
+            win.show()
+            win.focus()
+          }
+        })
+      }
+    } else if (tray) {
+      tray.destroy()
+      tray = null
+    }
+  } catch (err) {
+    console.error("Tray init failed:", err)
+  }
+}
+
 function autoStopSeeding(torrent) {
   if (!torrent || torrent._zaynAutoStopped) return
   torrent._zaynAutoStopped = true
@@ -1325,6 +1541,7 @@ ipcMain.handle("save-settings", async (event, incoming) => {
   await rebuildClient()
   await restartWebUi()
   await applyPortForwarding()
+  updateTrayState()
 
   const payload = {
     settings,

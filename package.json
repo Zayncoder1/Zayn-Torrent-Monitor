@@ -19,6 +19,10 @@
     "nodeGypRebuild": false,
     "files": [
       "**/*",
+      "!*.exe",
+      "!*.blockmap",
+      "!*.7z",
+      "!build/**",
       "!downloads/**",
       "!torrents/**",
       "!saved-torrents.json",
@@ -26,8 +30,15 @@
       "!dist/**"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis-web"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Zayncoder1",
+        "repo": "Zayn-Torrent-Monitor"
+      }
+    ],
     "copyright": "Copyright ?? 2026 Zayn",
     "nsis": {
       "oneClick": false,

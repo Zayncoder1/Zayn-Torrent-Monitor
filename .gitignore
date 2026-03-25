@@ -12,6 +12,9 @@ pnpm-debug.log*
 /out/
 /release/
 
+# Large offline installers (keep local, don't commit)
+Zayn Torrent Setup *.exe
+
 # App data / user state
 /downloads/
 /torrents/

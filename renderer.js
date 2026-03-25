@@ -1,9 +1,11 @@
-const { ipcRenderer } = require("electron")
+const { ipcRenderer, shell } = require("electron")
 
 const torrentBox = document.getElementById("torrents")
 const connectionBox = document.getElementById("connections")
 const internetStatus = document.getElementById("internetStatus")
 const systemStatus = document.getElementById("systemStatus")
+const updateBar = document.getElementById("updateBar")
+const updateLink = document.getElementById("updateLink")
 
 const magnetInput = document.getElementById("magnetInput")
 const addMagnetBtn = document.getElementById("addMagnetBtn")
@@ -28,6 +30,7 @@ const settingWebUiEnabled = document.getElementById("settingWebUiEnabled")
 const settingWebUiHost = document.getElementById("settingWebUiHost")
 const settingWebUiPort = document.getElementById("settingWebUiPort")
 const settingAutoSeed = document.getElementById("settingAutoSeed")
+const settingBackgroundOnClose = document.getElementById("settingBackgroundOnClose")
 
 const removeModal = document.getElementById("removeModal")
 const removeClose = document.getElementById("removeClose")
@@ -405,6 +408,9 @@ function fillSettingsForm(settings, status) {
     if (settingAutoSeed) {
         settingAutoSeed.checked = settings.behavior?.autoSeed ?? false
     }
+    if (settingBackgroundOnClose) {
+        settingBackgroundOnClose.checked = settings.behavior?.backgroundOnClose ?? true
+    }
 
     updateSettingsStatus(status)
 }
@@ -434,7 +440,8 @@ async function saveSettings() {
             port: Number(settingWebUiPort.value)
         },
         behavior: {
-            autoSeed: settingAutoSeed?.checked ?? false
+            autoSeed: settingAutoSeed?.checked ?? false,
+            backgroundOnClose: settingBackgroundOnClose?.checked ?? true
         }
     }
 
@@ -482,6 +489,22 @@ tabButtons.forEach(btn => {
 ipcRenderer.on("settings-status", (event, status) => {
     updateSettingsStatus(status)
 })
+
+ipcRenderer.on("update-status", (event, status) => {
+    if (!updateBar) return
+    if (status?.available) {
+        updateBar.style.display = "block"
+    } else {
+        updateBar.style.display = "none"
+    }
+})
+
+if (updateLink) {
+    updateLink.addEventListener("click", (event) => {
+        event.preventDefault()
+        shell.openExternal(updateLink.href)
+    })
+}
 
 if (addMagnetBtn) {
     addMagnetBtn.addEventListener("click", async () => {
