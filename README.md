@@ -12,6 +12,9 @@ Features
 Notes
 - Torrent port can be set to `0` to pick an unused port.
 - Web UI is disabled by default; enable it in Settings when needed.
-
-License
-MIT
+- Installation needs Internet
+Fun Facts
+- The original Project folder made by me is 8GB
+- Bundling the Installer took 3 Whole minutes
+Authors
+- Zayncoder1
