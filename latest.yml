@@ -1,14 +1,14 @@
-version: 1.0.1
+version: 1.0.2
 files:
-  - url: Zayn Torrent Monitor Setup 1.0.1.exe
-    sha512: C5yymzoa7/KNXA76eYOWffJsuCT6U4HEdRtQJljSjXxXVdtaLA5mhDPCEmwRnY/B8uTzE+K/mvjA9bfdDinH1A==
-path: Zayn Torrent Monitor Setup 1.0.1.exe
-sha512: C5yymzoa7/KNXA76eYOWffJsuCT6U4HEdRtQJljSjXxXVdtaLA5mhDPCEmwRnY/B8uTzE+K/mvjA9bfdDinH1A==
+  - url: Zayn-Torrent-Monitor-Web-Setup-1.0.2.exe
+    sha512: IPgWrS10nQIWQLGt5/oxCKtP2FN9ziW/CSiGGrJSrxuQ2/f9lya9inxrXRAvax2AB5QuVnfx5NTFZ4+YIvsavg==
+path: Zayn-Torrent-Monitor-Web-Setup-1.0.2.exe
+sha512: IPgWrS10nQIWQLGt5/oxCKtP2FN9ziW/CSiGGrJSrxuQ2/f9lya9inxrXRAvax2AB5QuVnfx5NTFZ4+YIvsavg==
 packages:
   x64:
-    size: 83643561
-    sha512: R5XYP9r09Qhy9wW5CkgkwCKRSNHf724QceeV5XEisTed92/QDiW44cA5pZ6IRnvKC2O2KjHTky2hkUckLyezWA==
-    blockMapSize: 88132
-    path: zayntorrent-1.0.1-x64.nsis.7z
-    file: zayntorrent-1.0.1-x64.nsis.7z
-releaseDate: '2026-03-25T09:02:41.761Z'
+    size: 83645801
+    sha512: psoWotB5ecShJ02VzPx2glxS8Sh9l6hhvNeM47QhIG8832I6PYw+ZNBEwMcs5D7eHDFVEKnKaUj990IM5NOC9Q==
+    blockMapSize: 88278
+    path: zayntorrent-1.0.2-x64.nsis.7z
+    file: zayntorrent-1.0.2-x64.nsis.7z
+releaseDate: '2026-03-31T13:04:04.463Z'

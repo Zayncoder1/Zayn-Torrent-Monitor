@@ -6,6 +6,7 @@ import https from "https"
 import dns from "dns"
 import http from "http"
 import net from "net"
+import dgram from "dgram"
 import os from "os"
 import NatAPI from "@silentbot1/nat-api"
 import crypto from "crypto"
@@ -27,7 +28,11 @@ let lastStats = {
 }
 let clientError = null
 let exitRequested = false
-let portFallbackActive = false
+let autoPortRetryCount = 0
+let autoPortRetryInFlight = false
+let manualPortRetryCount = 0
+let manualPortRetryInFlight = false
+let lastBoundTorrentPort = null
 
 let webServer = null
 let webServerState = {
@@ -39,6 +44,7 @@ let webServerState = {
 let tray = null
 let natClient = null
 let portForwardingInFlight = false
+let portForwardingQueued = false
 let portForwardingState = {
   torrent: {
     enabled: false,
@@ -60,6 +66,8 @@ let portForwardingState = {
 const FAIL_LIMIT = 5
 const CHECK_TIMEOUT_MS = 2500
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+const AUTO_PORT_RETRY_LIMIT = 5
+const MANUAL_PORT_RETRY_LIMIT = 5
 
 const PROBE_DNS = [
   "cloudflare.com",
@@ -143,6 +151,21 @@ const defaultSettings = {
 }
 
 let settings = null
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on("second-instance", () => {
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    } else {
+      app.whenReady().then(createWindow)
+    }
+  })
+}
 
 function ensureDir(dirPath) {
   if (!dirPath) return
@@ -309,7 +332,7 @@ async function shutdownServices() {
   }
 
   try {
-    stopWebUi()
+    await stopWebUi()
   } catch {
     // ignore
   }
@@ -405,6 +428,73 @@ function loadSettings() {
 
 function saveSettings(next) {
   fs.writeFileSync(settingsFile, JSON.stringify(next, null, 2))
+}
+
+function probeTcpPort(port) {
+  return new Promise(resolve => {
+    const server = net.createServer()
+    let settled = false
+
+    const finish = (ok, err) => {
+      if (settled) return
+      settled = true
+      try {
+        server.close(() => resolve({ ok, err }))
+      } catch {
+        resolve({ ok, err })
+      }
+    }
+
+    server.once("error", err => finish(false, err))
+    server.listen(port, () => finish(true))
+  })
+}
+
+function probeUdpPort(port) {
+  return new Promise(resolve => {
+    const socket = dgram.createSocket("udp4")
+    let settled = false
+
+    const finish = (ok, err) => {
+      if (settled) return
+      settled = true
+      try {
+        socket.close()
+      } catch {
+        // ignore
+      }
+      resolve({ ok, err })
+    }
+
+    socket.once("error", err => finish(false, err))
+    socket.bind(port, () => finish(true))
+  })
+}
+
+async function checkPortAvailability(port) {
+  if (!port || port === 0) return { ok: true }
+
+  const tcp = await probeTcpPort(port)
+  if (!tcp.ok) return { ok: false, reason: "tcp", err: tcp.err }
+
+  const udp = await probeUdpPort(port)
+  if (!udp.ok) return { ok: false, reason: "udp", err: udp.err }
+
+  return { ok: true }
+}
+
+function formatPortError(port, reason, err) {
+  const code = err?.code
+  if (code === "EACCES") {
+    return `Permission denied for port ${port}. Try a higher port or use 0 for auto.`
+  }
+  if (reason === "udp") {
+    return `Port ${port} is already in use (UDP). Try 20000-45000 or use 0 for auto.`
+  }
+  if (reason === "tcp") {
+    return `Port ${port} is already in use (TCP). Try 20000-45000 or use 0 for auto.`
+  }
+  return `Port ${port} is already in use. Try 20000-45000 or use 0 for auto.`
 }
 
 function normalizeEntry(entry) {
@@ -546,34 +636,71 @@ function removeSavedEntriesByInfoHash(infoHash) {
 
 function createClient() {
   clientError = null
-  const portToUse = portFallbackActive && settings.torrentPort !== 0
-    ? 0
-    : settings.torrentPort
+  const portToUse = settings.torrentPort
   const peerId = buildPeerId()
   client = new WebTorrent({
     peerId,
     nodeId: crypto.randomBytes(20),
     torrentPort: portToUse,
-    dhtPort: portToUse,
+    // Keep DHT on a separate (auto) UDP port to avoid conflicts with uTP on the torrent port.
+    dhtPort: 0,
     natUpnp: false,
     natPmp: false
   })
 
+  const currentClient = client
+
   client.on("error", (err) => {
+    if (client !== currentClient) return
     const code = err?.code || (typeof err?.message === "string" && err.message.includes("EADDRINUSE")
       ? "EADDRINUSE"
       : null)
+    const isPortError = code === "EADDRINUSE" || code === "EACCES"
 
-    if (!portFallbackActive && settings.torrentPort !== 0 && code === "EADDRINUSE") {
-      portFallbackActive = true
-      rebuildClient()
+    // If we're already listening, ignore late port errors (usually UTP/UDP) so the UI doesn't lie.
+    if (client && client.listening && isPortError) {
       return
     }
 
-    if (settings.torrentPort !== 0 && code === "EACCES") {
-      clientError = `Permission denied for port ${settings.torrentPort}. Try a higher port.`
-    } else if (settings.torrentPort !== 0 && code === "EADDRINUSE") {
-      clientError = `Port ${settings.torrentPort} is already in use.`
+    if (settings.torrentPort === 0 && (code === "EACCES" || code === "EADDRINUSE")) {
+      if (autoPortRetryCount < AUTO_PORT_RETRY_LIMIT) {
+        autoPortRetryCount += 1
+        clientError = "Auto port failed. Retrying..."
+        if (!autoPortRetryInFlight) {
+          autoPortRetryInFlight = true
+          setTimeout(() => {
+            autoPortRetryInFlight = false
+            rebuildClient()
+          }, 300)
+        }
+        sendSettingsStatus()
+        return
+      }
+      clientError = "Auto port failed repeatedly. Try a manual port between 20000-45000."
+      sendSettingsStatus()
+      return
+    }
+
+    if (settings.torrentPort !== 0 && code === "EADDRINUSE") {
+      const canRetry = lastBoundTorrentPort &&
+        settings.torrentPort === lastBoundTorrentPort &&
+        manualPortRetryCount < MANUAL_PORT_RETRY_LIMIT
+      if (canRetry) {
+        manualPortRetryCount += 1
+        clientError = "Port still releasing. Retrying..."
+        if (!manualPortRetryInFlight) {
+          manualPortRetryInFlight = true
+          setTimeout(() => {
+            manualPortRetryInFlight = false
+            rebuildClient()
+          }, 400)
+        }
+        sendSettingsStatus()
+        return
+      }
+      clientError = `Port ${settings.torrentPort} is already in use. Try 20000-45000 or use 0 for auto.`
+    } else if (settings.torrentPort !== 0 && code === "EACCES") {
+      clientError = `Permission denied for port ${settings.torrentPort}. Try a higher port or use 0 for auto.`
     } else {
       clientError = err?.message || "Unknown error"
     }
@@ -583,6 +710,14 @@ function createClient() {
   })
 
   client.on("listening", () => {
+    if (client !== currentClient) return
+    if (settings.torrentPort === 0) {
+      autoPortRetryCount = 0
+    }
+    manualPortRetryCount = 0
+    manualPortRetryInFlight = false
+    lastBoundTorrentPort = client?.torrentPort ?? lastBoundTorrentPort
+    clientError = null
     sendSettingsStatus()
     applyPortForwarding()
   })
@@ -606,8 +741,12 @@ function destroyClient() {
 }
 
 async function rebuildClient() {
+  if (client?.torrentPort) {
+    lastBoundTorrentPort = client.torrentPort
+  }
   await destroyClientAsync()
   if (shuttingDown) return
+  clientError = null
   createClient()
   loadSavedTorrents()
 }
@@ -616,14 +755,13 @@ function buildSettingsStatus() {
   const requestedPort = settings.torrentPort
   const actualPort = client ? client.torrentPort : settings.torrentPort
   let torrentPortError = null
+  const isListening = !!(client && client.listening && typeof actualPort === "number" && actualPort > 0)
 
-  if (client && client.listening) {
+  if (isListening) {
     if (requestedPort !== 0 && actualPort !== requestedPort) {
       torrentPortError = `Port ${requestedPort} unavailable. Using ${actualPort}.`
     }
-  }
-
-  if (!torrentPortError && clientError) {
+  } else if (clientError) {
     torrentPortError = clientError
   }
 
@@ -748,8 +886,13 @@ async function destroyPortForwarding() {
 }
 
 async function applyPortForwarding() {
-  if (portForwardingInFlight || shuttingDown) return
+  if (shuttingDown) return
+  if (portForwardingInFlight) {
+    portForwardingQueued = true
+    return
+  }
   portForwardingInFlight = true
+  portForwardingQueued = false
 
   try {
     await destroyPortForwarding()
@@ -867,6 +1010,10 @@ async function applyPortForwarding() {
   } finally {
     sendSettingsStatus()
     portForwardingInFlight = false
+    if (portForwardingQueued && !shuttingDown) {
+      portForwardingQueued = false
+      setTimeout(() => applyPortForwarding(), 0)
+    }
   }
 }
 
@@ -920,31 +1067,41 @@ function startWebUi() {
 }
 
 function stopWebUi() {
-  if (!webServer) {
-    webServerState.running = false
-    webServerState.error = null
-    webServerState.host = settings.webUi.host
-    webServerState.port = settings.webUi.port
-    return
-  }
-  const server = webServer
-  webServer = null
-  try {
-    server.close()
-  } catch {
-    // ignore
-  }
-  webServerState.running = false
-  webServerState.error = null
-  webServerState.host = settings.webUi.host
-  webServerState.port = settings.webUi.port
-  if (!shuttingDown) {
-    applyPortForwarding()
-  }
+  return new Promise(resolve => {
+    if (!webServer) {
+      webServerState.running = false
+      webServerState.error = null
+      webServerState.host = settings.webUi.host
+      webServerState.port = settings.webUi.port
+      return resolve()
+    }
+    const server = webServer
+    webServer = null
+    let finished = false
+    const finalize = () => {
+      if (finished) return
+      finished = true
+      webServerState.running = false
+      webServerState.error = null
+      webServerState.host = settings.webUi.host
+      webServerState.port = settings.webUi.port
+      if (!shuttingDown) {
+        applyPortForwarding()
+      }
+      resolve()
+    }
+    try {
+      server.close(finalize)
+    } catch {
+      finalize()
+      return
+    }
+    setTimeout(finalize, 1000)
+  })
 }
 
 async function restartWebUi() {
-  stopWebUi()
+  await stopWebUi()
   startWebUi()
 }
 
@@ -1534,11 +1691,36 @@ ipcMain.handle("get-settings", () => {
 })
 
 ipcMain.handle("save-settings", async (event, incoming) => {
-  settings = normalizeSettings(incoming)
+  const nextSettings = normalizeSettings(incoming)
+  const previousSettings = settings
+  const activePort = client && client.listening ? client.torrentPort : null
+  const canKeepPort = activePort &&
+    (nextSettings.torrentPort === 0 || nextSettings.torrentPort === activePort)
+  const needsRebuild = !(client && client.listening && canKeepPort)
+
+  if (nextSettings.torrentPort !== 0 && !canKeepPort) {
+    const availability = await checkPortAvailability(nextSettings.torrentPort)
+    if (!availability.ok) {
+      clientError = formatPortError(nextSettings.torrentPort, availability.reason, availability.err)
+      sendSettingsStatus()
+      return {
+        settings: previousSettings,
+        status: buildSettingsStatus()
+      }
+    }
+  }
+
+  settings = nextSettings
   saveSettings(settings)
 
-  portFallbackActive = false
-  await rebuildClient()
+  autoPortRetryCount = 0
+  autoPortRetryInFlight = false
+  manualPortRetryCount = 0
+  manualPortRetryInFlight = false
+
+  if (needsRebuild) {
+    await rebuildClient()
+  }
   await restartWebUi()
   await applyPortForwarding()
   updateTrayState()

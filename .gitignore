@@ -24,6 +24,7 @@ settings.json
 # OS / tooling
 .DS_Store
 Thumbs.db
+debug-ports.ps1
 
 # Codex local
 .codex/

@@ -59,14 +59,36 @@ let downloadHistory = []
 let uploadHistory = []
 const MAX_POINTS = 120
 
+function normalizeSpeed(value) {
+    return Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+function resizeCanvas() {
+    const width = canvas.clientWidth || canvas.width
+    const height = canvas.clientHeight || canvas.height
+    if (canvas.width !== width) canvas.width = width
+    if (canvas.height !== height) canvas.height = height
+}
+
 let lastSettingsStatus = null
 let addStatusTimer = null
 let pendingRemoveHash = null
 
 function drawGraph() {
 
+    resizeCanvas()
+
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+    const maxValue = Math.max(
+        1,
+        ...downloadHistory.map(v => normalizeSpeed(v)),
+        ...uploadHistory.map(v => normalizeSpeed(v))
+    )
+
+    const padding = 8
+    const usableHeight = Math.max(1, canvas.height - padding * 2)
+    const scale = usableHeight / maxValue
     const step = canvas.width / MAX_POINTS
 
     ctx.beginPath()
@@ -75,8 +97,9 @@ function drawGraph() {
 
     downloadHistory.forEach((v, i) => {
 
+        const value = normalizeSpeed(v)
         const x = i * step
-        const y = canvas.height - v
+        const y = canvas.height - padding - (value * scale)
 
         if (i === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
@@ -91,8 +114,9 @@ function drawGraph() {
 
     uploadHistory.forEach((v, i) => {
 
+        const value = normalizeSpeed(v)
         const x = i * step
-        const y = canvas.height - v
+        const y = canvas.height - padding - (value * scale)
 
         if (i === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
@@ -134,8 +158,8 @@ ipcRenderer.on("stats", (event, data) => {
 
     }
 
-    const dl = totalDownload / 50000
-    const ul = totalUpload / 50000
+    const dl = normalizeSpeed(totalDownload)
+    const ul = normalizeSpeed(totalUpload)
 
     downloadHistory.push(dl)
     uploadHistory.push(ul)
